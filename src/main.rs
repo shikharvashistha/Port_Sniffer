@@ -1,20 +1,25 @@
-//we'll use cargo run -- -h (we use -- to pass arguments to the executable and not cargo)
-//ip_sniffer.exe -h help screen
-//ip_sniffer.exe -j 100 192.168.1.1 how many threads to use
-//ip_sniffer.exe 192.168.1.1 calling code on ip with default threads
 use std::env;//standards library environment tool namespace
 //helps to pull arg's out of command line
-use std::net::IpAddr;
-use std::str::FromsStr;//As we're bringing in our arguments as strings
+use std::io::{self, Write};
+use std::net::IpAddr;//to connect to our IP Address
+use std::str::FromStr;//As we're bringing in our arguments as strings
 //This allows us to convert our string to our IP Address type
+use std::process;//This will allow use to manage the way our program shuts down
+use std::sync::mpsc::{Sender, channel};
+use std::thread;
+use std::net::TcpStream;
+//tcpstream will allow us to create a tcp stream
+
+const MAX: u16 =65535;//These are the max ports we can sniff
+
 struct Arguments{
-    flag: String, 
+    flag: String,
     ipaddr: IpAddr,//IpAddr is enum either V4 or V6
     threads: u16,
 }
 
 impl Arguments{
-    fn new(args: &[String]) -> Result<Arguments, &'static str>{
+    fn new(args: &[String]) -> Result<Arguments, &'static str> {
         //static slice of string is used so we can send back the errors
         //to main fxn and handle them there
         //arguments to our method new will be reference to vector of string
@@ -39,18 +44,18 @@ impl Arguments{
             //that means there's is no IP which means that wither a we've one of our Flags
             //is either -h or -j or nothing important
             //we'll check then
-            if flag.contains("-h") || flag.contains("-help") && args.length() ==2 {
+            if flag.contains("-h") || flag.contains("-help") && args.len() == 2 {
                 println!("Usage: -j to select how many threds you wnat 
-                    \r\n  -h or help to show this help message")
+                    \r\n  -h or help to show this help message");
                 return Err("help");
-        } else if falg.contains("-h") || flag.contains("-help") {//if args.length != 2
+        } else if flag.contains("-h") || flag.contains("-help") {//if args.length != 2
             return Err("Too many arguments");
         } else if flag.contains("-j") {
             let ipaddr = match IpAddr::from_str(&args[3]){
                 //we're going to match in turning our args index 3
                 //into an IP address and bind to ipaddr variable
                 Ok(s) => s, //unwrapping our Ok value here
-                Err(_) => return Err("Not a valid IP Address; must be IPv4 or IPv6");
+                Err(_) => return Err("Not a valid IP Address; must be IPv4 or IPv6")
                 //if we get an error we return Error
             };
             let threads = match args[2].parse::<u16>(){
@@ -63,6 +68,32 @@ impl Arguments{
         } else {
             return Err("Invalid Syntax");
         }
+    }
+}
+}
+
+fn scan(tx: Sender<u16>, start_port: u16, addr: IpAddr, num_threads: u16){
+    //our first thread will look at port number 1 our second thread will look at port number 2 and so on.
+    let mut port: u16 = start_port + 1;
+    //as we're using 0 based indexing
+    loop{
+        match TcpStream::connect((addr, port)){
+            Ok(_) => {//This means the port is open
+                print!(".");//It is there to just send back the feedback to the user that it is working
+                //everytime it finds a port that is open
+                //To use IO in thread we need to import IO
+                io::stdout().flush().unwrap();
+                //It allow us to send all these print statements to the mutex
+                //of shared data
+                tx.send(port).unwrap();//This will be send back to rx that we created in main() the port number
+            }
+                //which is open
+                Err(_) => {}
+            }
+            if (MAX-port) <= num_threads{
+                break;
+            }
+            port += num_threads;//we iterate our port by the number of thread
     }
 }
 
@@ -85,15 +116,33 @@ fn main() {
     we can do it this way but it's little verbose
     so we will make seperate struct's for each of them to make it look descent
     */
-    let arguments = Arguments::new(&args).unwrap_or_else(
+    let arguments = Arguments::new(&args).unwrap_or_else(//closure
             |err| {
                 if err.contains("help") {
-                    //7:56
+                    process::exit(0);//quit out of our program we pass 0 so it doesn't pin it
                 } else {
-
+                    eprintln!("{} Problem parsing arguments: {}", program, err);//error print new line
+                    process::exit(0);                    
                 }
             }
-
         );
-
+    let num_threads=arguments.threads;//we bind arguments.threds to our variable num_thread
+    let addr = arguments.ipaddr;
+    let (tx, rx)=channel();//we instantiate a channel and destruct the tuple returned from it
+    for i in 0..num_threads {
+        let tx=tx.clone();//we need transmitter for every thread we've
+        thread::spawn(move || {//we spawn our thread with a move closure
+            scan(tx, i, addr, num_threads);
+        });        
+    }
+    let mut out = vec![];
+    drop(tx);//This helps TX is only in the other threads not in the main thread
+    for p in rx {//we get output from our reciever here
+        out.push(p);
+    }
+    println!("");
+    out.sort();
+    for v in out {
+        println!("{} is open", v);
+    }
 }
