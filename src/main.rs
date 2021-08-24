@@ -154,7 +154,7 @@ fn main() {
         //we get output from our reciever here
         out.push(p);
     }
-    println!("");
+    println!();
     out.sort();
     for v in out {
         println!("{} is open", v);
